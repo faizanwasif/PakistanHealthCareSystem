@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>System Debug - Pakistan Healthcare</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #4ec9b0;
+        }
+        .section {
+            background: #252526;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            border-left: 4px solid #4ec9b0;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .status.ok {
+            background: #4ec9b0;
+            color: #1e1e1e;
+        }
+        .status.error {
+            background: #f48771;
+            color: #1e1e1e;
+        }
+        button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #1177bb;
+        }
+        pre {
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            border: 1px solid #3e3e42;
+        }
+        .test-input {
+            width: 100%;
+            padding: 10px;
+            background: #3c3c3c;
+            border: 1px solid #3e3e42;
+            color: #d4d4d4;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 System Debug Console</h1>
+        
+        <div class="section">
+            <h2>System Status</h2>
+            <button onclick="checkStatus()">Check Status</button>
+            <pre id="status-output">Click "Check Status" to begin...</pre>
+        </div>
+
+        <div class="section">
+            <h2>Test Triage Agent</h2>
+            <input type="text" class="test-input" id="test-query" placeholder="Enter test query (e.g., 'I have fever')" value="I have fever">
+            <button onclick="testTriage()">Test Triage</button>
+            <pre id="triage-output">Results will appear here...</pre>
+        </div>
+
+        <div class="section">
+            <h2>Test Full Chat Flow</h2>
+            <input type="text" class="test-input" id="chat-query" placeholder="Enter query" value="Bachay ko bukhar hai">
+            <input type="text" class="test-input" id="citizen-id" placeholder="Citizen ID" value="citizen_001">
+            <button onclick="testFullChat()">Test Full Chat</button>
+            <pre id="chat-output">Results will appear here...</pre>
+        </div>
+
+        <div class="section">
+            <h2>Check Database</h2>
+            <button onclick="checkDatabase()">Check Database</button>
+            <pre id="db-output">Results will appear here...</pre>
+        </div>
+
+        <div class="section">
+            <h2>Server Logs</h2>
+            <p>Check your terminal/console where the server is running for detailed error logs.</p>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        async function checkStatus() {
+            const output = document.getElementById('status-output');
+            output.textContent = 'Checking...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/debug/check`);
+                const data = await response.json();
+                output.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                output.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function testTriage() {
+            const output = document.getElementById('triage-output');
+            const query = document.getElementById('test-query').value;
+            output.textContent = 'Testing...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/chat/test`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query })
+                });
+                const data = await response.json();
+                output.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                output.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function testFullChat() {
+            const output = document.getElementById('chat-output');
+            const query = document.getElementById('chat-query').value;
+            const citizenId = document.getElementById('citizen-id').value;
+            output.textContent = 'Testing full chat flow...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/chat/message`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        query: query,
+                        citizen_id: citizenId
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    output.textContent = `Error ${response.status}: ${JSON.stringify(errorData, null, 2)}`;
+                    return;
+                }
+                
+                const data = await response.json();
+                output.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                output.textContent = `Error: ${error.message}\n\nCheck server logs for details.`;
+            }
+        }
+
+        async function checkDatabase() {
+            const output = document.getElementById('db-output');
+            output.textContent = 'Checking database...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/debug/check`);
+                const data = await response.json();
+                
+                let result = `Database Status: ${data.database}\n`;
+                result += `Citizens: ${data.citizens}\n`;
+                result += `Facilities: ${data.facilities}\n`;
+                result += `Agents Registered: ${data.agents}\n`;
+                result += `OpenAI Configured: ${data.openai_configured}\n`;
+                
+                if (data.citizens === 0) {
+                    result += `\n⚠️ WARNING: No citizens in database!\n`;
+                    result += `Run: python seed_database.py\n`;
+                }
+                
+                if (data.facilities === 0) {
+                    result += `\n⚠️ WARNING: No facilities in database!\n`;
+                    result += `Run: python seed_database.py\n`;
+                }
+                
+                output.textContent = result;
+            } catch (error) {
+                output.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        // Auto-check on load
+        window.onload = () => {
+            checkStatus();
+        };
+    </script>
+</body>
+</html>

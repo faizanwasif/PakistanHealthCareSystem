@@ -400,39 +400,38 @@ async function sendMessage() {
 }
 
 function displayResults(data) {
-    console.log('displayResults called');
+    console.log('displayResults called with:', data);
     
-    // Get the message to display
+    // Get the clean message to display
     let message = 'Hello! How can I help you?';
     
     if (data && data.response) {
+        // Clean response - just use the response text directly
         message = data.response;
+        
+        // Add urgency indicator if available
+        if (data.urgency) {
+            const urgencyColors = {
+                'high': '#f44336',
+                'medium': '#ff9800', 
+                'low': '#4caf50'
+            };
+            const urgencyColor = urgencyColors[data.urgency] || '#666';
+            message += `<br><br><span style="color: ${urgencyColor}; font-weight: bold;">⚠️ Urgency: ${data.urgency.toUpperCase()}</span>`;
+        }
+        
+        // Add action if available
+        if (data.action && data.action !== data.response) {
+            message += `<br><br><strong>📋 Recommended Action:</strong><br>${data.action}`;
+        }
+        
+        // Add agents involved
+        if (data.agents_involved && data.agents_involved.length > 0) {
+            message += `<br><br><small style="color: #666;">🤖 Processed by: ${data.agents_involved.join(', ')}</small>`;
+        }
     }
     
-    console.log('Message to display:', message);
-    
-    // Check if this is a facility search with results
-    if (data.has_facilities && data.facility_recommendations && data.facility_recommendations.length > 0) {
-        message = `<strong>🏥 Nearby Hospitals Found:</strong><br><br>`;
-        data.facility_recommendations.forEach((facility, index) => {
-            message += `<div style="background: #f8f9fa; padding: 10px; margin: 5px 0; border-radius: 8px; border-left: 3px solid #1976d2;">`;
-            message += `<strong>${index + 1}. ${facility.facility_name || 'Hospital'}</strong><br>`;
-            if (facility.distance_km) {
-                message += `📍 Distance: ${facility.distance_km} km<br>`;
-            }
-            if (facility.available_services && facility.available_services.length > 0) {
-                message += `🏥 Services: ${facility.available_services.join(', ')}<br>`;
-            }
-            if (facility.address) {
-                message += `📍 Address: ${facility.address}<br>`;
-            }
-            message += `</div>`;
-        });
-    } else if (data.facility_message) {
-        message += `<br><br><em style="color: #666;">${data.facility_message}</em>`;
-    } else if (data.has_facilities === false && (data.response.includes('hospital') || data.response.includes('find'))) {
-        message += `<br><br><em style="color: #666;">🔍 Searching for nearby hospitals... Please wait while we find facilities in your area.</em>`;
-    }
+    console.log('Clean message to display:', message);
     
     // Add message directly to DOM
     const messagesContainer = document.getElementById('chat-messages');
@@ -498,13 +497,52 @@ function addMessage(content, type, isLoading = false) {
     if (isLoading) {
         messageDiv.innerHTML = `<div class="loading">${content}</div>`;
     } else {
-        messageDiv.innerHTML = `<div class="message-content">${content}</div>`;
+        const formattedContent = formatMessageContent(content);
+        messageDiv.innerHTML = `<div class="message-content">${formattedContent}</div>`;
     }
 
     messagesContainer.appendChild(messageDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
     return messageId;
+}
+
+function formatMessageContent(content) {
+    // Handle structured content formatting
+    let formatted = content;
+    
+    // Format bold text (**text**)
+    formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    
+    // Format bullet points (* item)
+    formatted = formatted.replace(/^\* (.+)$/gm, '<li>$1</li>');
+    
+    // Wrap consecutive list items in ul tags
+    formatted = formatted.replace(/(<li>.*<\/li>)/gs, (match) => {
+        return `<ul class="formatted-list">${match}</ul>`;
+    });
+    
+    // Format sections with colons (Title:)
+    formatted = formatted.replace(/^([^:]+:)(?=\s)/gm, '<div class="section-title">$1</div>');
+    
+    // Format temperature readings
+    formatted = formatted.replace(/(\d+°[CF])/g, '<span class="temperature">$1</span>');
+    
+    // Format medicine names in parentheses
+    formatted = formatted.replace(/\(([^)]+)\)/g, '<span class="medicine-name">($1)</span>');
+    
+    // Convert line breaks to proper paragraphs
+    formatted = formatted.split('\n').map(line => {
+        line = line.trim();
+        if (line === '') return '';
+        if (line.includes('<li>') || line.includes('<div class="section-title">')) return line;
+        return `<p>${line}</p>`;
+    }).join('');
+    
+    // Clean up empty paragraphs
+    formatted = formatted.replace(/<p><\/p>/g, '');
+    
+    return formatted;
 }
 
 function removeMessage(messageId) {
@@ -673,24 +711,40 @@ async function viewEligibilityDetails() {
 
 async function findNearbyFacilities() {
     // Show loading message
-    const loadingId = addMessage('🔍 Searching for nearby hospitals...', 'bot', true);
+    const loadingId = addMessage('📍 Getting your location...', 'bot', true);
     
     try {
-        // Use the chat API to find hospitals
-        const response = await fetch(`${API_BASE}/api/chat/message`, {
-            method: 'POST',
+        // Get user's live location
+        const position = await new Promise((resolve, reject) => {
+            if (!navigator.geolocation) {
+                reject(new Error('Geolocation is not supported by this browser'));
+                return;
+            }
+            
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 60000
+            });
+        });
+        
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        
+        // Update loading message
+        removeMessage(loadingId);
+        const searchingId = addMessage('🔍 Searching for nearby hospitals...', 'bot', true);
+        
+        // Use the facilities API with live location
+        const response = await fetch(`${API_BASE}/api/facilities/nearby?lat=${lat}&lng=${lng}&max_distance=10`, {
+            method: 'GET',
             headers: {
-                'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`
-            },
-            body: JSON.stringify({
-                query: "find nearby hospitals",
-                conversation_id: currentConversationId || null
-            })
+            }
         });
 
         // Remove loading message
-        removeMessage(loadingId);
+        removeMessage(searchingId);
 
         if (!response.ok) {
             const errorData = await response.json();
@@ -700,18 +754,87 @@ async function findNearbyFacilities() {
 
         const data = await response.json();
         
-        // Update conversation ID
-        if (data.conversation_id) {
-            currentConversationId = data.conversation_id;
+        if (data.success && data.data.facilities) {
+            // Format hospital results with live location
+            let hospitalMessage = `<strong>🏥 Found ${data.data.total_found} Nearby Hospitals</strong><br>`;
+            hospitalMessage += `<small>📍 Your location: ${lat.toFixed(4)}, ${lng.toFixed(4)}</small><br>`;
+            
+            if (data.data.expanded_search) {
+                hospitalMessage += `<small>🔍 Expanded search to ${data.data.search_radius_used}km radius</small><br>`;
+            }
+            hospitalMessage += `<br>`;
+            
+            data.data.facilities.forEach((hospital, index) => {
+                hospitalMessage += `<div style="background: #f8f9fa; padding: 12px; margin: 8px 0; border-radius: 8px; border-left: 4px solid #1976d2;">`;
+                hospitalMessage += `<strong>${index + 1}. ${hospital.facility_name}</strong><br>`;
+                hospitalMessage += `📍 Distance: ${hospital.distance_km} km<br>`;
+                hospitalMessage += `🏥 Services: ${hospital.available_services.join(', ')}<br>`;
+                hospitalMessage += `📍 Address: ${hospital.address}<br>`;
+                hospitalMessage += `⏰ Timings: ${hospital.timings}<br>`;
+                if (hospital.sehat_card_accepted) {
+                    hospitalMessage += `💳 <span style="color: #4caf50;">Sehat Card Accepted</span><br>`;
+                }
+                hospitalMessage += `</div>`;
+            });
+            
+            addMessage(hospitalMessage, 'bot');
+        } else {
+            addMessage('No hospitals found even with expanded search. Please contact emergency services if urgent.', 'bot');
         }
-        
-        // Display results
-        displayResults(data);
 
     } catch (error) {
         console.error('Error finding facilities:', error);
         removeMessage(loadingId);
-        addMessage('Error finding nearby hospitals. Please try again.', 'bot');
+        
+        if (error.message.includes('location') || error.code === 1) {
+            addMessage('❌ Location access denied. Using default location (Karachi) to find hospitals.<br><br>Please enable location access for better results.', 'bot');
+            
+            // Fallback to default location
+            setTimeout(() => findNearbyFacilitiesDefault(), 1000);
+        } else {
+            addMessage('Error finding nearby hospitals. Please try again.', 'bot');
+        }
+    }
+}
+
+async function findNearbyFacilitiesDefault() {
+    // Fallback function with default Karachi location
+    const loadingId = addMessage('🔍 Searching hospitals in Karachi...', 'bot', true);
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/facilities/nearby?lat=24.8607&lng=67.0011&max_distance=10`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        removeMessage(loadingId);
+
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.data.facilities) {
+                let hospitalMessage = `<strong>🏥 Found ${data.data.total_found} Hospitals in Karachi:</strong><br><br>`;
+                
+                data.data.facilities.forEach((hospital, index) => {
+                    hospitalMessage += `<div style="background: #f8f9fa; padding: 12px; margin: 8px 0; border-radius: 8px; border-left: 4px solid #1976d2;">`;
+                    hospitalMessage += `<strong>${index + 1}. ${hospital.facility_name}</strong><br>`;
+                    hospitalMessage += `📍 Distance: ${hospital.distance_km} km<br>`;
+                    hospitalMessage += `🏥 Services: ${hospital.available_services.join(', ')}<br>`;
+                    hospitalMessage += `📍 Address: ${hospital.address}<br>`;
+                    hospitalMessage += `⏰ Timings: ${hospital.timings}<br>`;
+                    if (hospital.sehat_card_accepted) {
+                        hospitalMessage += `💳 <span style="color: #4caf50;">Sehat Card Accepted</span><br>`;
+                    }
+                    hospitalMessage += `</div>`;
+                });
+                
+                addMessage(hospitalMessage, 'bot');
+            }
+        }
+    } catch (error) {
+        removeMessage(loadingId);
+        addMessage('Error finding hospitals. Please try again.', 'bot');
     }
 }
 
@@ -820,29 +943,10 @@ window.onclick = function (event) {
 }
 
 function setupVoiceRecording() {
-    // Add voice button to chat interface
-    const chatContainer = document.querySelector('.chat-container');
-    if (chatContainer) {
-        const voiceButton = document.createElement('button');
-        voiceButton.id = 'voice-button';
-        voiceButton.innerHTML = '🎤';
-        voiceButton.style.cssText = `
-            position: fixed;
-            bottom: 80px;
-            right: 20px;
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            border: none;
-            background: #4CAF50;
-            color: white;
-            font-size: 24px;
-            cursor: pointer;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-            z-index: 1000;
-        `;
+    // Voice button is now inline in HTML, just ensure it exists
+    const voiceButton = document.getElementById('voice-button');
+    if (voiceButton) {
         voiceButton.onclick = toggleVoiceRecording;
-        document.body.appendChild(voiceButton);
     }
 }
 
@@ -872,7 +976,7 @@ async function toggleVoiceRecording() {
             
             // Update button appearance
             voiceButton.innerHTML = '⏹️';
-            voiceButton.style.background = '#f44336';
+            voiceButton.classList.add('recording');
             
             // Add recording indicator
             addMessage('🎤 Recording... Click stop when finished', 'bot');
@@ -889,7 +993,7 @@ async function toggleVoiceRecording() {
         
         isRecording = false;
         voiceButton.innerHTML = '🎤';
-        voiceButton.style.background = '#4CAF50';
+        voiceButton.classList.remove('recording');
     }
 }
 

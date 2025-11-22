@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.config import config
 from backend.database import connect_db, close_db, get_db
-from agents.healthcare_crew import healthcare_crew
+from agents.simple_healthcare_agent import simple_healthcare_agent
 from backend.models import MCPMessage, UrgencyLevel
 from backend.error_handler import StandardError, safe_execute_async
 from backend.api_response import success_response, error_response, paginated_response
@@ -196,9 +196,12 @@ async def signup(user: UserCreate):
         
         db = get_db()
         
-        # Check if user already exists
-        existing_user = await db.users.find_one({"phone": user.phone})
-        if existing_user:
+        # Check if user already exists using Firestore syntax
+        users_ref = db.collection("users")
+        existing_query = users_ref.where("phone", "==", user.phone).limit(1)
+        existing_users = list(existing_query.stream())
+        
+        if existing_users:
             raise StandardError.validation_error("phone", "Phone number already registered")
         
         # Create user ID
@@ -208,8 +211,8 @@ async def signup(user: UserCreate):
         hashed_password = get_password_hash(user.password)
         
         # Check if this is the first user (make them admin)
-        user_count = await db.users.count_documents({})
-        is_admin = user_count == 0 or user.phone == "+92-300-0000000"
+        all_users = list(users_ref.limit(1).stream())
+        is_admin = len(all_users) == 0 or user.phone == "+92-300-0000000"
         
         # Create user document
         user_doc = {
@@ -228,10 +231,12 @@ async def signup(user: UserCreate):
             "updated_at": datetime.utcnow()
         }
         
-        await db.users.insert_one(user_doc)
+        # Insert user using Firestore syntax
+        doc_ref = db.collection("users").document(user_id)
+        doc_ref.set(user_doc)
         
         # Create access token
-        access_token = create_access_token(data={"sub": user_id})
+        access_token = create_access_token(data={"sub": user.phone})
         
         logger.info(f"New user registered: {user_id}")
         
@@ -254,31 +259,40 @@ async def login(credentials: UserLogin):
     try:
         db = get_db()
         
-        # Find user
-        user = await db.users.find_one({"phone": credentials.phone})
-        if not user:
+        # Find user using Firestore syntax
+        users_ref = db.collection("users")
+        query = users_ref.where("phone", "==", credentials.phone).limit(1)
+        users = query.stream()
+        
+        user_doc = None
+        for user in users:
+            user_doc = user.to_dict()
+            user_doc['id'] = user.id
+            break
+            
+        if not user_doc:
             raise HTTPException(
                 status_code=401,
                 detail="Invalid phone number or password"
             )
         
         # Verify password
-        if not verify_password(credentials.password, user["password"]):
+        if not verify_password(credentials.password, user_doc["password"]):
             raise HTTPException(
                 status_code=401,
                 detail="Invalid phone number or password"
             )
         
         # Create access token
-        access_token = create_access_token(data={"sub": user["user_id"]})
+        access_token = create_access_token(data={"sub": user_doc["phone"]})
         
-        logger.info(f"User logged in: {user['user_id']}")
+        logger.info(f"User logged in: {user_doc['id']}")
         
         return Token(
             access_token=access_token,
             token_type="bearer",
-            user_id=user["user_id"],
-            name=user["name"]
+            user_id=user_doc["id"],
+            name=user_doc.get("name", "User")
         )
         
     except HTTPException:
@@ -288,19 +302,23 @@ async def login(credentials: UserLogin):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/auth/me")
-async def get_current_user_info(user_id: str = Depends(get_current_user)):
+async def get_current_user_info(phone: str = Depends(get_current_user)):
     """Get current user information"""
     try:
         db = get_db()
-        user = await db.users.find_one({"user_id": user_id})
-        if not user:
+        
+        # Find user using phone (which is what get_current_user returns)
+        users_ref = db.collection("users")
+        query = users_ref.where("phone", "==", phone).limit(1)
+        users = list(query.stream())
+        
+        if not users:
             raise HTTPException(status_code=404, detail="User not found")
         
-        # Convert ObjectId to string
-        if '_id' in user:
-            user['_id'] = str(user['_id'])
+        user_doc = users[0].to_dict()
+        user_doc['id'] = users[0].id
         
-        return user
+        return user_doc
     except HTTPException:
         raise
     except Exception as e:
@@ -308,20 +326,23 @@ async def get_current_user_info(user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/auth/history")
-async def get_user_history(user_id: str = Depends(get_current_user)):
+async def get_user_history(phone: str = Depends(get_current_user)):
     """Get user's conversation history"""
     try:
         db = get_db()
         
-        # Get all conversations for this user
-        conversations = await db.conversations.find(
-            {"citizen_id": user_id}
-        ).sort("created_at", -1).limit(50).to_list(length=50)
+        # Get all conversations for this user using Firestore syntax (without order_by)
+        conversations_ref = db.collection("conversations")
+        query = conversations_ref.where("citizen_id", "==", phone).limit(50)
+        conversations = []
         
-        # Convert ObjectId to string
-        for conv in conversations:
-            if '_id' in conv:
-                conv['_id'] = str(conv['_id'])
+        for conv in query.stream():
+            conv_data = conv.to_dict()
+            conv_data['id'] = conv.id
+            conversations.append(conv_data)
+        
+        # Sort in Python instead of Firestore
+        conversations.sort(key=lambda x: x.get('created_at', ''), reverse=True)
         
         return {"conversations": conversations}
     except Exception as e:
@@ -329,24 +350,27 @@ async def get_user_history(user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/notifications")
-async def get_notifications(user_id: str = Depends(get_current_user)):
+async def get_notifications(phone: str = Depends(get_current_user)):
     """Get user notifications"""
     try:
         db = get_db()
         
-        notifications = await db.notifications.find(
-            {"user_id": user_id}
-        ).sort("created_at", -1).limit(20).to_list(length=20)
+        # Get notifications using Firestore syntax (without order_by to avoid index requirement)
+        notifications_ref = db.collection("notifications")
+        query = notifications_ref.where("user_id", "==", phone).limit(20)
+        notifications = []
         
-        # Convert ObjectId
-        for notif in notifications:
-            if '_id' in notif:
-                notif['_id'] = str(notif['_id'])
+        for notif in query.stream():
+            notif_data = notif.to_dict()
+            notif_data['id'] = notif.id
+            notifications.append(notif_data)
         
-        unread_count = await db.notifications.count_documents({
-            "user_id": user_id,
-            "status": "unread"
-        })
+        # Sort in Python instead of Firestore
+        notifications.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        # Count unread notifications
+        unread_query = notifications_ref.where("user_id", "==", phone).where("status", "==", "unread")
+        unread_count = len(list(unread_query.stream()))
         
         return {
             "notifications": notifications,
@@ -393,32 +417,34 @@ async def send_chat_message(data: dict, user_id: str = Depends(get_current_user)
         if not citizen_id:
             raise HTTPException(status_code=400, detail="Citizen ID is required")
         
-        # Process query through CrewAI healthcare system
-        crew_result = await healthcare_crew.process_patient_query(
+        # Process query through simple healthcare agent (fast response)
+        agent_result = await simple_healthcare_agent.process_query(
             user_id=citizen_id,
             query=query,
             conversation_id=conversation_id
         )
         
-        if not crew_result["success"]:
-            raise HTTPException(status_code=500, detail=f"Healthcare crew error: {crew_result['error']}")
+        if not agent_result["success"]:
+            raise HTTPException(status_code=500, detail=f"Healthcare agent error: {agent_result['error']}")
         
-        # Store conversation
+        # Store conversation using Firestore syntax
         db = get_db()
-        await db.add_document("conversations", {
+        db.collection("conversations").document(conversation_id).set({
             "conversation_id": conversation_id,
             "citizen_id": citizen_id,
             "query": query,
-            "response": crew_result["result"],
-            "agents_involved": crew_result["agents_involved"],
+            "response": agent_result["result"],
+            "urgency": agent_result.get("urgency", "medium"),
+            "agents_involved": agent_result["agents_involved"],
             "created_at": datetime.utcnow()
         })
         
         return success_response(
             data={
                 "conversation_id": conversation_id,
-                "response": crew_result["result"],
-                "agents_involved": crew_result["agents_involved"]
+                "response": agent_result["result"],
+                "urgency": agent_result.get("urgency", "medium"),
+                "agents_involved": agent_result["agents_involved"]
             },
             message="Query processed successfully"
         )
@@ -561,26 +587,33 @@ async def get_sehat_card_status(user_id: str = Depends(get_current_user)):
                 "message": "You have an active Sehat Card"
             }
         
-        # Check for pending application
-        applications = await db.sehat_card_applications.find({"user_id": user_id}).sort("applied_at", -1).limit(1).to_list(1)
-        application = applications[0] if applications else None
+        # Check for pending application using Firestore syntax (without order_by)
+        applications_ref = db.collection("sehat_card_applications")
+        query = applications_ref.where("user_id", "==", user_id).limit(10)
+        applications = list(query.stream())
         
-        if not application:
+        if not applications:
             return {
                 "has_card": False,
                 "status": "not_applied",
                 "message": "You haven't applied for Sehat Card yet"
             }
         
-        # Convert ObjectId
-        if '_id' in application:
-            application['_id'] = str(application['_id'])
+        # Sort in Python and get the latest
+        app_list = []
+        for app in applications:
+            app_data = app.to_dict()
+            app_data['id'] = app.id
+            app_list.append(app_data)
+        
+        app_list.sort(key=lambda x: x.get('applied_at', ''), reverse=True)
+        application_doc = app_list[0]
         
         return {
             "has_card": False,
-            "status": application["status"],
-            "application": application,
-            "message": f"Your application is {application['status']}"
+            "status": application_doc["status"],
+            "application": application_doc,
+            "message": f"Your application is {application_doc['status']}"
         }
         
     except HTTPException:
@@ -621,20 +654,162 @@ async def update_user_profile(data: dict, user_id: str = Depends(get_current_use
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/facilities/nearby")
-async def get_nearby_facilities(lat: float, lng: float, max_distance: float = 10):
-    """Find nearby healthcare facilities"""
+async def get_nearby_facilities(lat: float = 24.8607, lng: float = 67.0011, max_distance: float = 10):
+    """Find nearby healthcare facilities - expands search until hospitals found"""
     try:
-        result = await facility_matcher_agent.process({
-            "citizen_location": {"lat": lat, "lng": lng},
-            "urgency_level": UrgencyLevel.LOW,
-            "required_services": [],
-            "required_medicines": [],
-            "sehat_card_active": False
+        # Comprehensive hospital database across Pakistan
+        all_hospitals = [
+            # Karachi hospitals
+            {
+                "facility_id": "aga_khan",
+                "facility_name": "Aga Khan University Hospital",
+                "lat": 24.8903, "lng": 67.0756,
+                "available_services": ["Emergency", "Cardiology", "General Medicine", "ICU"],
+                "address": "Stadium Road, Karachi",
+                "sehat_card_accepted": True,
+                "timings": "24/7 Emergency, OPD: 8AM-8PM"
+            },
+            {
+                "facility_id": "civil_hospital",
+                "facility_name": "Civil Hospital Karachi",
+                "lat": 24.8615, "lng": 67.0099,
+                "available_services": ["Emergency", "General Medicine", "Surgery", "Pediatrics"],
+                "address": "Baba-e-Urdu Road, Karachi",
+                "sehat_card_accepted": True,
+                "timings": "24/7"
+            },
+            # Lahore hospitals
+            {
+                "facility_id": "mayo_hospital",
+                "facility_name": "Mayo Hospital Lahore",
+                "lat": 31.5497, "lng": 74.3436,
+                "available_services": ["Emergency", "General Medicine", "Surgery", "Cardiology"],
+                "address": "Nila Gumbad, Lahore",
+                "sehat_card_accepted": True,
+                "timings": "24/7"
+            },
+            {
+                "facility_id": "services_hospital",
+                "facility_name": "Services Hospital Lahore",
+                "lat": 31.5204, "lng": 74.3587,
+                "available_services": ["Emergency", "Neurology", "Orthopedics", "ICU"],
+                "address": "Ghaus-e-Azam Road, Lahore",
+                "sehat_card_accepted": True,
+                "timings": "24/7"
+            },
+            # Islamabad hospitals
+            {
+                "facility_id": "pims_hospital",
+                "facility_name": "Pakistan Institute of Medical Sciences",
+                "lat": 33.7077, "lng": 73.0946,
+                "available_services": ["Emergency", "General Medicine", "Surgery", "Pediatrics"],
+                "address": "Shaheed Zulfiqar Ali Bhutto Medical University, Islamabad",
+                "sehat_card_accepted": True,
+                "timings": "24/7"
+            },
+            {
+                "facility_id": "shifa_hospital",
+                "facility_name": "Shifa International Hospital",
+                "lat": 33.6844, "lng": 73.0479,
+                "available_services": ["Emergency", "Cardiology", "Oncology", "ICU"],
+                "address": "H-8/4, Islamabad",
+                "sehat_card_accepted": True,
+                "timings": "24/7"
+            },
+            # Peshawar hospitals
+            {
+                "facility_id": "lrh_peshawar",
+                "facility_name": "Lady Reading Hospital Peshawar",
+                "lat": 34.0151, "lng": 71.5249,
+                "available_services": ["Emergency", "General Medicine", "Surgery", "Trauma"],
+                "address": "Circular Road, Peshawar",
+                "sehat_card_accepted": True,
+                "timings": "24/7"
+            },
+            {
+                "facility_id": "kth_peshawar",
+                "facility_name": "Khyber Teaching Hospital",
+                "lat": 34.0186, "lng": 71.5804,
+                "available_services": ["Emergency", "Cardiology", "Neurology", "ICU"],
+                "address": "Jamrud Road, Peshawar",
+                "sehat_card_accepted": True,
+                "timings": "24/7"
+            },
+            # Faisalabad hospitals
+            {
+                "facility_id": "allied_hospital",
+                "facility_name": "Allied Hospital Faisalabad",
+                "lat": 31.4504, "lng": 73.1350,
+                "available_services": ["Emergency", "General Medicine", "Surgery"],
+                "address": "Sargodha Road, Faisalabad",
+                "sehat_card_accepted": True,
+                "timings": "24/7"
+            }
+        ]
+        
+        # Start with initial search radius
+        search_distances = [max_distance, 25, 50, 100, 200, 500]  # Expand search
+        nearby_hospitals = []
+        
+        for search_radius in search_distances:
+            nearby_hospitals = []
+            for hospital in all_hospitals:
+                distance = calculate_distance(lat, lng, hospital["lat"], hospital["lng"])
+                if distance <= search_radius:
+                    hospital_data = hospital.copy()
+                    hospital_data["distance_km"] = round(distance, 1)
+                    del hospital_data["lat"]
+                    del hospital_data["lng"]
+                    nearby_hospitals.append(hospital_data)
+            
+            # If we found hospitals, break
+            if nearby_hospitals:
+                break
+        
+        # Sort by distance
+        nearby_hospitals.sort(key=lambda x: x["distance_km"])
+        
+        # Log MCP server activity
+        await mcp_server.send_secure_message(
+            "facility_agent", "system", "FACILITY_SEARCH",
+            {
+                "user_location": {"lat": lat, "lng": lng},
+                "search_radius_used": search_radius,
+                "hospitals_found": len(nearby_hospitals),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+        
+        return success_response({
+            "facilities": nearby_hospitals,
+            "total_found": len(nearby_hospitals),
+            "search_location": {"lat": lat, "lng": lng},
+            "search_radius_used": search_radius,
+            "max_distance_km": max_distance,
+            "expanded_search": search_radius > max_distance
         })
-        return result.dict()
+        
     except Exception as e:
         logger.error(f"Error finding facilities: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return error_response("Failed to find nearby facilities")
+
+def calculate_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Calculate distance between two points using Haversine formula"""
+    import math
+    
+    # Convert to radians
+    lat1, lng1, lat2, lng2 = map(math.radians, [lat1, lng1, lat2, lng2])
+    
+    # Haversine formula
+    dlat = lat2 - lat1
+    dlng = lng2 - lng1
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    
+    # Earth's radius in kilometers
+    r = 6371
+    
+    return c * r
 
 # ============= MCP Server APIs =============
 
@@ -1120,23 +1295,25 @@ async def voice_chat(file: UploadFile = File(...), current_user: dict = Depends(
         # Translate to English for processing
         english_query = await translate_to_english(urdu_text)
         
-        # Process through healthcare crew
+        # Process through simple healthcare agent
         conversation_id = str(uuid.uuid4())
-        crew_result = await healthcare_crew.process_patient_query(
-            current_user["user_id"], english_query, conversation_id
+        user_id = current_user if isinstance(current_user, str) else current_user.get("user_id", "unknown")
+        
+        agent_result = await simple_healthcare_agent.process_query(
+            user_id, english_query, conversation_id
         )
         
-        if crew_result["success"]:
+        if agent_result["success"]:
             # Translate response back to Urdu
-            urdu_response = await translate_to_urdu(crew_result["result"])
+            urdu_response = await translate_to_urdu(agent_result["result"])
             
             return success_response({
                 "conversation_id": conversation_id,
                 "urdu_input": urdu_text,
                 "english_input": english_query,
-                "english_response": crew_result["result"],
+                "english_response": agent_result["result"],
                 "urdu_response": urdu_response,
-                "agents_involved": crew_result["agents_involved"]
+                "agents_involved": agent_result["agents_involved"]
             })
         else:
             return error_response("Failed to process voice query")

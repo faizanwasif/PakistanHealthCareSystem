@@ -11,48 +11,41 @@
         <header>
             <h1>🏥 Pakistan Healthcare System</h1>
             <p class="subtitle">AI-Powered Healthcare Coordination | صحت کا نظام - AI سے چلنے والا</p>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 15px;">
+            <div class="header-controls">
                 <div class="status-indicator">
                     <span class="status-dot online"></span>
                     <span id="status-text">Online</span>
                 </div>
-                <div style="display: flex; align-items: center; gap: 15px;">
-                    <span id="user-name" style="color: #1976d2; font-weight: bold;"></span>
-                    <div style="position: relative;">
-                        <button onclick="toggleNotifications()" style="padding: 8px 12px; background: #fff; border: 2px solid #1976d2; border-radius: 5px; cursor: pointer; position: relative;">
-                            🔔 <span id="notif-badge" style="display: none; position: absolute; top: -5px; right: -5px; background: #f44336; color: white; border-radius: 50%; width: 20px; height: 20px; font-size: 0.7em; line-height: 20px;"></span>
-                        </button>
-                        <div id="notifications-dropdown" style="display: none; position: absolute; right: 0; top: 45px; background: white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); width: 350px; max-height: 400px; overflow-y: auto; z-index: 1000;"></div>
-                    </div>
-                    <button onclick="logout()" style="padding: 8px 16px; background: #f44336; color: white; border: none; border-radius: 5px; cursor: pointer;">
-                        Logout
+                <div class="user-controls">
+                    <span id="user-name"></span>
+                    <button onclick="toggleNotifications()" class="notification-btn">
+                        🔔 <span id="notif-badge"></span>
                     </button>
+                    <button onclick="logout()" class="logout-btn">Logout</button>
                 </div>
             </div>
+            <div id="notifications-dropdown" class="notifications-dropdown"></div>
         </header>
 
         <main>
             <div class="chat-container">
                 <div class="chat-header">
                     <h2>Healthcare Assistant | صحت کے بارے میں پوچھیں</h2>
-                    <p>Ask about your health concerns | اپنی صحت کے بارے میں پوچھیں</p>
-                    <div style="background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; padding: 8px; margin: 10px 0; font-size: 0.9em;">
-                        ⚠️ <strong>Medical Disclaimer:</strong> This AI assistant provides general guidance only. Always consult qualified healthcare professionals for medical decisions.
-                    </div>
+                    <p>Ask about your health concerns in English or Urdu | اپنی صحت کے بارے میں پوچھیں</p>
                 </div>
 
                 <div id="chat-messages" class="chat-messages">
                     <div class="message bot-message">
                         <div class="message-content">
                             <p><strong>Welcome to Pakistan Healthcare System! | خوش آمدید!</strong></p>
-                            <p><strong>I can help you with | میں آپ کی مدد کر سکتا ہوں:</strong></p>
-                            <ul style="margin: 10px 0; padding-left: 20px;">
-                                <li>Health queries and symptom analysis | صحت کے سوالات اور علامات کا تجزیہ</li>
-                                <li>Finding nearby healthcare facilities | قریبی صحت کی سہولیات تلاش کریں</li>
-                                <li>Checking Sehat Card eligibility | صحت کارڈ کی اہلیت چیک کریں</li>
-                                <li>Getting medical recommendations | طبی مشورے حاصل کریں</li>
+                            <p><strong>I can help you with:</strong></p>
+                            <ul>
+                                <li>Health queries and symptom analysis | صحت کے سوالات</li>
+                                <li>Finding nearby healthcare facilities | قریبی ہسپتال</li>
+                                <li>Checking Sehat Card eligibility | صحت کارڈ کی اہلیت</li>
+                                <li>Getting medical recommendations | طبی مشورے</li>
                             </ul>
-                            <p><strong>Try asking:</strong> "I have fever" or "Bachay ko bukhar hai"</p>
+                            <p><strong>Try asking:</strong> "I have fever" or "بخار ہے"</p>
                         </div>
                     </div>
                 </div>
@@ -61,51 +54,47 @@
                     <input 
                         type="text" 
                         id="chat-input" 
-                        placeholder="Type your health query in English or Urdu... (e.g., I have fever / بخار ہے)"
+                        placeholder="Type your health query... (English/Urdu)"
                     >
-                    <button id="send-button" onclick="sendMessage()">
-                        Send | بھیجیں
+                    <button id="voice-button" onclick="toggleVoiceRecording()" title="Voice Input">
+                        🎤
                     </button>
-                </div>
-                <div class="voice-info" style="text-align: center; margin-top: 10px; font-size: 12px; color: #666;">
-                    🎤 Voice Input Available: Click the floating microphone button to speak in Urdu<br>
-                    آواز میں بولنے کے لیے مائیکروفون بٹن دبائیں
+                    <button id="send-button" onclick="sendMessage()">
+                        Send
+                    </button>
                 </div>
             </div>
 
             <div class="info-panel">
                 <div class="card">
-                    <h3>🎯 System Status | سسٹم کی حالت</h3>
+                    <h3>💳 Sehat Card Status</h3>
+                    <div id="sehat-card-status">
+                        <p>Loading...</p>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>🏥 Quick Actions</h3>
+                    <button class="action-btn" onclick="findNearbyFacilities()">
+                        🏥 Find Nearby Hospitals
+                    </button>
+                    <button class="action-btn" onclick="viewTrace()">
+                        🔍 View Agent Trace
+                    </button>
+                </div>
+
+                <div class="card system-stats">
+                    <h3>📊 System Status</h3>
                     <div class="stat-grid">
                         <div class="stat">
-                            <span class="stat-label">Active Agents | فعال ایجنٹس</span>
+                            <span class="stat-label">Active Agents</span>
                             <span class="stat-value" id="agent-count">4</span>
                         </div>
                         <div class="stat">
-                            <span class="stat-label">Messages Processed | پیغامات</span>
+                            <span class="stat-label">Messages</span>
                             <span class="stat-value" id="message-count">0</span>
                         </div>
                     </div>
-                    <div id="conversation-info" style="margin-top: 10px; padding: 8px; background: #f0f7ff; border-radius: 5px; font-size: 0.8em; color: #666; display: none;">
-                        <strong>Conversation ID:</strong> <span id="conv-id-display">-</span>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h3>💳 Sehat Card | صحت کارڈ</h3>
-                    <div id="sehat-card-status">
-                        <p style="font-size: 0.9em; color: #666;">Loading...</p>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h3>🏥 Quick Actions | فوری کارروائیاں</h3>
-                    <button class="action-btn" onclick="findNearbyFacilities()">
-                        🏥 Find Nearby Hospitals | قریبی ہسپتال تلاش کریں
-                    </button>
-                    <button class="action-btn" onclick="viewTrace()">
-                        View Agent Trace | ایجنٹ ٹریس دیکھیں
-                    </button>
                 </div>
             </div>
         </main>

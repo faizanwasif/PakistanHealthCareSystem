@@ -12,3 +12,4 @@ requests==2.31.0
 crewai==0.41.1
 langchain-google-genai==1.0.10
 cryptography==41.0.7
+PyYAML==6.0.1

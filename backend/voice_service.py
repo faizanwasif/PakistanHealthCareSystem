@@ -83,7 +83,7 @@ async def translate_to_english(urdu_text: str) -> str:
 
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         prompt = f"""Convert this Urdu text to natural conversational English: "{urdu_text}"
         
         Rules:
@@ -111,7 +111,7 @@ async def translate_to_urdu(english_text: str) -> str:
 
     try:
         genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         prompt = f"""Convert this English text to natural, contextual Urdu: "{english_text}"
         
         Rules:

@@ -201,6 +201,55 @@ class PrivateMCPServer:
             "audit_entries": len(self.audit_log),
             "uptime": datetime.utcnow().isoformat()
         }
+    
+    async def get_trace(self, conversation_id: str) -> Dict[str, Any]:
+        """Get agent interaction trace for conversation"""
+        try:
+            db = get_db()
+            
+            # Get MCP messages for this conversation
+            messages_ref = db.collection("mcp_messages")
+            messages = []
+            for msg in messages_ref.stream():
+                msg_data = msg.to_dict()
+                if conversation_id in str(msg_data.get("payload", {})):
+                    msg_data['id'] = msg.id
+                    messages.append(msg_data)
+            
+            # Get agent decisions
+            decisions_ref = db.collection("agent_decisions")
+            decisions = []
+            for decision in decisions_ref.stream():
+                decision_data = decision.to_dict()
+                if conversation_id in str(decision_data.get("context", {})):
+                    decision_data['id'] = decision.id
+                    decisions.append(decision_data)
+            
+            # Get agent negotiations
+            negotiations_ref = db.collection("agent_negotiations")
+            negotiations = []
+            for neg in negotiations_ref.stream():
+                neg_data = neg.to_dict()
+                negotiations.append(neg_data)
+            
+            return {
+                "conversation_id": conversation_id,
+                "messages": messages,
+                "decisions": decisions,
+                "negotiations": negotiations,
+                "audit_log": [entry for entry in self.audit_log if conversation_id in str(entry)]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting trace: {e}")
+            return {
+                "conversation_id": conversation_id,
+                "messages": [],
+                "decisions": [],
+                "negotiations": [],
+                "audit_log": [],
+                "error": str(e)
+            }
 
 # Global MCP server instance
 mcp_server = PrivateMCPServer()
